@@ -1,12 +1,11 @@
 # The website, published to Cloudflare Pages from here because this repository is public and its Actions minutes
 # are free. The private repository builds the site and its demo and hands them over on the branch site-build as
 # site.tar.gz: the built pages (build/site) and, beside them in site/, the two Pages Functions, the step list they
-# share, the settings, the counter's schema and wrangler.toml. A push to that branch publishes it.
+# share, the settings, the counter's schema and wrangler.toml. Started by hand (Actions, site, Run workflow), since a
+# push runs the workflow file on the pushed branch, and site-build holds only the handover.
 name: site
 
 on:
-  push:
-    branches: [site-build]
   workflow_dispatch:
 
 permissions:
