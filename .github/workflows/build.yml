@@ -1,0 +1,157 @@
+# The program's builds, made here because this repository is public and its Actions minutes are free, the Mac
+# ones included. The source is fetched from the private repository with a read-only key (ENGINE_SOURCE_TOKEN)
+# and never leaves the runner: the compile's own output goes to a file that is neither printed nor uploaded,
+# since a compiler quotes source lines in its warnings; only the compiled wheels are kept. They are handed to
+# installers.yml on the branch build-inputs, as the private repository's release workflow hands them, with the
+# installer scripts of the same commit.
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "the private repository's branch, tag or commit to build"
+        required: true
+        default: feat/simple-dashboard
+      version:
+        description: "the version, e.g. v3.0.1; it must equal setup.py's"
+        required: true
+      publish:
+        description: "publish the release once the installers are built"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  SOURCE_REPO: kstark9911/alm-framework
+
+jobs:
+  wheels:
+    name: wheel ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, arch: AMD64 }
+          - { os: macos-14, arch: arm64 }
+          # the Intel Mac wheel is cross-compiled on Apple silicon and tested under Rosetta
+          - { os: macos-14, arch: x86_64 }
+    steps:
+      - name: The keys are set
+        shell: bash
+        env:
+          ENGINE_SOURCE_TOKEN: ${{ secrets.ENGINE_SOURCE_TOKEN }}
+          ALM_PUBLIC_KEY: ${{ secrets.ALM_PUBLIC_KEY }}
+        run: |
+          [ -n "$ENGINE_SOURCE_TOKEN" ] || { echo "::error::ENGINE_SOURCE_TOKEN is not set"; exit 1; }
+          [ -n "$ALM_PUBLIC_KEY" ] || { echo "::error::ALM_PUBLIC_KEY is not set: a build without it runs with no licence"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.ENGINE_SOURCE_TOKEN }}
+          path: src
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The version matches setup.py
+        shell: bash
+        working-directory: src
+        env:
+          WANT: ${{ inputs.version }}
+        run: |
+          v=$(python -c "import re; print(re.search(r'version\s*=\s*\"([^\"]+)\"', open('setup.py').read()).group(1))")
+          [ "v$v" = "$WANT" ] || { echo "::error::version $WANT, but setup.py says $v"; exit 1; }
+
+      - name: Install the licence public key
+        shell: bash
+        working-directory: src
+        env:
+          ALM_PUBLIC_KEY: ${{ secrets.ALM_PUBLIC_KEY }}
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          key = os.environ["ALM_PUBLIC_KEY"].strip()
+          p = pathlib.Path("engine/licence.py")
+          s = p.read_text()
+          assert 'PUBLIC_KEY_PEM = b""' in s, "key slot not found or already filled"
+          p.write_text(s.replace('PUBLIC_KEY_PEM = b""', 'PUBLIC_KEY_PEM = b"""\\\n' + key + '\n"""'))
+          print("licence key installed")
+          PY
+
+      - name: Build and test the wheel
+        shell: bash
+        env:
+          CIBW_ENVIRONMENT: ALMPACK=1 ALMDEBUG=0
+          CIBW_SKIP: "*-musllinux_* *_i686 *-win32"
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BEFORE_BUILD: pip install "numpy>=2.0" "scipy>=1.10" "Cython>=3.0"
+          CIBW_TEST_COMMAND: python {project}/tools/check_wheel.py installed --licensed
+        run: |
+          tag=$(python -c "import sys; sys.path.insert(0, 'src/installers'); import runtime; print(runtime.CPYTHON_TAG)")
+          export CIBW_BUILD="$tag-*"
+          pip install -q cibuildwheel==2.21.3
+          # the compile's output stays on the runner (it quotes source); a failure prints its error lines alone
+          if ! python -m cibuildwheel src --output-dir wheelhouse > build.log 2>&1; then
+            # message lines only, each at the start of its line; a quoted source line is indented and left out
+            grep -E "^(Error compiling Cython file|error: |ERROR: |[A-Z][A-Za-z]*Error: |(installed-)?wheel check FAILED|cibuildwheel: )" build.log | tail -40
+            echo "::error::the build failed; its error lines are above, the full log stays on the runner"
+            exit 1
+          fi
+          grep -E "wheel OK|installed wheel OK" build.log || true
+          ls -la wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  hand-over:
+    name: hand over to the installers
+    needs: wheels
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.ENGINE_SOURCE_TOKEN }}
+          path: src
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: The wheels and the installer scripts, on build-inputs
+        run: |
+          tag=$(python3 -c "import sys; sys.path.insert(0, 'src/installers'); import runtime; print(runtime.CPYTHON_TAG)")
+          shopt -s nullglob
+          wheels=(wheelhouse/*-$tag-*win_amd64.whl wheelhouse/*-$tag-*macosx_*.whl)
+          [ ${#wheels[@]} -eq 3 ] || { echo "::error::want the Windows and two Mac $tag wheels, found: ${wheels[*]}"; exit 1; }
+          url="https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY"
+          if ! git clone -q --depth 1 --branch build-inputs "$url" handover 2>/dev/null; then
+            git init -q -b build-inputs handover && git -C handover remote add origin "$url"
+          fi
+          rm -rf "handover/$VERSION" && mkdir -p "handover/$VERSION"
+          cp "${wheels[@]}" "handover/$VERSION/"
+          git -C src archive --format=tar.gz -o "$PWD/handover/$VERSION/installers.tar.gz" HEAD installers
+          git -C handover add -A
+          git -C handover -c user.name="build" -c user.email="build@users.noreply.github.com" commit -q -m "Builds for $VERSION"
+          git -C handover push -q origin build-inputs
+
+      - name: Start the installers
+        run: gh workflow run installers.yml --repo "$GITHUB_REPOSITORY" --ref main -f version="$VERSION" -f publish=${{ inputs.publish }}
