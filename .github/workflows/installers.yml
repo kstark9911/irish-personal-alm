@@ -32,10 +32,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-2022, target: windows-x86_64, pattern: "*-cp312-*win_amd64.whl" }
-          - { os: macos-14, target: macos-arm64, pattern: "*-cp312-*macosx_*_arm64.whl" }
+          - { os: windows-2022, target: windows-x86_64, platform: "win_amd64.whl" }
+          - { os: macos-14, target: macos-arm64, platform: "macosx_*_arm64.whl" }
           # the Intel Mac app is staged on Apple silicon, its dependencies fetched for an Intel Mac
-          - { os: macos-14, target: macos-x86_64, pattern: "*-cp312-*macosx_*_x86_64.whl" }
+          - { os: macos-14, target: macos-x86_64, platform: "macosx_*_x86_64.whl" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,7 +61,9 @@ jobs:
       - name: Build the installer
         shell: bash
         run: |
-          set -- handover/$VERSION/${{ matrix.pattern }}
+          # the wheel for the Python the installers carry, as the handed runtime.py names it
+          tag=$(python -c "import sys; sys.path.insert(0, 'installers'); import runtime; print(runtime.CPYTHON_TAG)")
+          set -- handover/$VERSION/*-$tag-*${{ matrix.platform }}
           if [ $# -ne 1 ] || [ ! -f "$1" ]; then echo "::error::want one wheel for ${{ matrix.target }}, found: $*"; exit 1; fi
           python installers/build_app.py --wheel "$1" --target ${{ matrix.target }} --out build/installers
 
