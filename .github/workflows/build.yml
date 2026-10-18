@@ -20,6 +20,11 @@ on:
         description: "publish the release once the installers are built"
         type: boolean
         default: true
+      systems:
+        description: "which wheels to build; anything but all builds them only, to check, and hands nothing over"
+        type: choice
+        default: all
+        options: [all, windows, mac]
 
 permissions:
   contents: write
@@ -35,11 +40,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: windows-2022, arch: AMD64 }
-          - { os: macos-14, arch: arm64 }
-          # the Intel Mac wheel is cross-compiled on Apple silicon and tested under Rosetta
-          - { os: macos-14, arch: x86_64 }
+        # the Intel Mac wheel is cross-compiled on Apple silicon and tested under Rosetta
+        include: ${{ inputs.systems == 'windows' && fromJSON('[{"os":"windows-2022","arch":"AMD64"}]')
+                     || inputs.systems == 'mac' && fromJSON('[{"os":"macos-14","arch":"arm64"},{"os":"macos-14","arch":"x86_64"}]')
+                     || fromJSON('[{"os":"windows-2022","arch":"AMD64"},{"os":"macos-14","arch":"arm64"},{"os":"macos-14","arch":"x86_64"}]') }}
     steps:
       - name: The keys are set
         shell: bash
@@ -101,9 +105,12 @@ jobs:
           pip install -q cibuildwheel==2.21.3
           # the compile's output stays on the runner (it quotes source); a failure prints its error lines alone
           if ! python -m cibuildwheel src --output-dir wheelhouse > build.log 2>&1; then
-            # message lines only, each at the start of its line; a quoted source line is indented and left out
-            grep -E "^(Error compiling Cython file|error: |ERROR: |[A-Z][A-Za-z]*Error: |(installed-)?wheel check FAILED|cibuildwheel: )" build.log | tail -40
-            echo "::error::the build failed; its error lines are above, the full log stays on the runner"
+            # the log's end with what quotes source left out: Cython's context blocks (between rules of dashes)
+            # and a compiler's quoted lines (a line number and a bar, or a caret line)
+            awk '/^-{20,}$/ { skip = !skip; next } !skip' build.log \
+              | grep -vE '^[[:space:]]*[0-9]+[[:space:]]*\|' | grep -vE '^[[:space:]]*\|' | grep -vE '^[[:space:]]*[~^]+[[:space:]]*$' \
+              | tail -80 || true
+            echo "::error::the build failed; the log's end is above, the full log stays on the runner"
             exit 1
           fi
           grep -E "wheel OK|installed wheel OK" build.log || true
@@ -118,6 +125,7 @@ jobs:
   hand-over:
     name: hand over to the installers
     needs: wheels
+    if: inputs.systems == 'all'
     runs-on: ubuntu-22.04
     env:
       GH_TOKEN: ${{ github.token }}
