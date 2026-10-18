@@ -18,7 +18,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: 66910cb193c36f9955b0e9f6cf6f37fa
-      PROJECT: irish-personal-alm
+      PROJECT: almanacsoftware
       DATABASE: alm-site-events
     steps:
       - name: The Cloudflare token is set
