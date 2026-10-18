@@ -1,0 +1,76 @@
+# The website, published to Cloudflare Pages from here because this repository is public and its Actions minutes
+# are free. The private repository builds the site and its demo and hands them over on the branch site-build as
+# site.tar.gz: the built pages (build/site) and, beside them in site/, the two Pages Functions, the step list they
+# share, the settings, the counter's schema and wrangler.toml. A push to that branch publishes it.
+name: site
+
+on:
+  push:
+    branches: [site-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish the website
+    runs-on: ubuntu-22.04
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: 66910cb193c36f9955b0e9f6cf6f37fa
+      PROJECT: irish-personal-alm
+      DATABASE: alm-site-events
+    steps:
+      - name: The Cloudflare token is set
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set: Settings, Secrets and variables, Actions, New repository secret"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: site-build
+          path: handover
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: The built site and its functions
+        run: |
+          tar -xzf handover/site.tar.gz
+          test -f build/site/index.html && test -f site/wrangler.toml
+          ls site build/site
+
+      - name: The counter's database and its table
+        working-directory: site
+        run: |
+          npx --yes wrangler@3 d1 list --json > ../build/d1.json
+          id=$(python3 -c "import json; print(next((d['uuid'] for d in json.load(open('../build/d1.json')) if d['name'] == '$DATABASE'), ''))")
+          if [ -z "$id" ]; then
+            npx --yes wrangler@3 d1 create "$DATABASE"
+            npx --yes wrangler@3 d1 list --json > ../build/d1.json
+            id=$(python3 -c "import json; print(next(d['uuid'] for d in json.load(open('../build/d1.json')) if d['name'] == '$DATABASE'))")
+          fi
+          sed -i "s|^database_id = .*|database_id = \"$id\"|" wrangler.toml
+          npx --yes wrangler@3 d1 execute "$DATABASE" --remote --file schema.sql
+
+      - name: The Pages project and the funnel key
+        working-directory: site
+        env:
+          FUNNEL_KEY: ${{ secrets.FUNNEL_KEY }}
+        run: |
+          npx --yes wrangler@3 pages project list > ../build/projects.txt
+          grep -q "$PROJECT" ../build/projects.txt \
+            || npx --yes wrangler@3 pages project create "$PROJECT" --production-branch main
+          if [ -n "$FUNNEL_KEY" ]; then
+            printf '%s' "$FUNNEL_KEY" | npx --yes wrangler@3 pages secret put FUNNEL_KEY --project-name "$PROJECT"
+          else
+            echo "::warning::FUNNEL_KEY is not set: the funnel page answers nothing until it is"
+          fi
+
+      - name: Publish
+        working-directory: site
+        run: npx --yes wrangler@3 pages deploy --project-name "$PROJECT" --branch main --commit-dirty=true
