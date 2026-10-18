@@ -98,7 +98,7 @@ jobs:
           CIBW_SKIP: "*-musllinux_* *_i686 *-win32"
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BEFORE_BUILD: pip install "numpy>=2.0" "scipy>=1.10" "Cython>=3.0"
-          CIBW_TEST_COMMAND: python {project}/tools/check_wheel.py installed --licensed
+          CIBW_TEST_COMMAND: python {package}/tools/check_wheel.py installed --licensed   # {package} is src, {project} the working folder
         run: |
           tag=$(python -c "import sys; sys.path.insert(0, 'src/installers'); import runtime; print(runtime.CPYTHON_TAG)")
           export CIBW_BUILD="$tag-*"
