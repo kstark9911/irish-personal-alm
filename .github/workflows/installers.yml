@@ -1,0 +1,102 @@
+# The installers a stranger downloads from the website, built here because this repository is public and its
+# Actions minutes are free; the program's source stays in the private repository. Its release workflow builds
+# the wheels (compiled, no readable source) and hands them over in a draft release, build-inputs-<version>,
+# with installers.tar.gz, the installer scripts of the same commit. This wraps each wheel with a Python of its
+# own and the launcher, publishes <version> with the installers and the wheels, and deletes the draft.
+name: installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "the version to build, e.g. v3.0.0 (the draft build-inputs-<version> holds its builds)"
+        required: true
+      publish:
+        description: "publish the release; otherwise the installers are only built, as this run's artifacts"
+        type: boolean
+        default: true
+  repository_dispatch:
+    types: [installers]
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ inputs.version || github.event.client_payload.version }}
+
+jobs:
+  installers:
+    name: installer ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, target: windows-x86_64, pattern: "*-cp312-*win_amd64.whl" }
+          - { os: macos-14, target: macos-arm64, pattern: "*-cp312-*macosx_*_arm64.whl" }
+          # the Intel Mac app is staged on Apple silicon, its dependencies fetched for an Intel Mac
+          - { os: macos-14, target: macos-x86_64, pattern: "*-cp312-*macosx_*_x86_64.whl" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The builds and the installer scripts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/fetch-inputs.sh
+
+      - name: Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the installer
+        shell: bash
+        run: |
+          set -- inputs/${{ matrix.pattern }}
+          if [ $# -ne 1 ] || [ ! -f "$1" ]; then echo "::error::want one wheel for ${{ matrix.target }}, found: $*"; exit 1; fi
+          python installers/build_app.py --wheel "$1" --target ${{ matrix.target }} --out build/installers
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            build/installers/*.exe
+            build/installers/*.dmg
+
+  publish:
+    name: publish
+    needs: installers
+    if: (github.event_name == 'workflow_dispatch' && inputs.publish) || github.event.client_payload.publish == true
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: The builds and the product's name
+        run: bash .github/fetch-inputs.sh
+
+      - name: Publish the release
+        run: |
+          name=$(python3 -c "import sys; sys.path.insert(0, 'installers'); import runtime; print(runtime.NAME)")
+          ls -la dist inputs/*.whl
+          gh release create "$VERSION" dist/*.exe dist/*.dmg inputs/*.whl \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$name $VERSION" \
+            --notes "Windows: the file ending Setup.exe. Mac: arm64.dmg for Apple silicon, x86_64.dmg for Intel.
+          The install guide on the website takes you through it; everything works for 30 days without a licence.
+
+          The .whl files are the same program, to install with pip into a Python of your own."
+
+      - name: The handed-over draft is no longer needed
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$INPUTS_RELEASE_ID"
