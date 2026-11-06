@@ -33,9 +33,9 @@ jobs:
       matrix:
         include:
           - { os: windows-2022, target: windows-x86_64, platform: "win_amd64.whl" }
-          - { os: macos-14, target: macos-arm64, platform: "macosx_*_arm64.whl" }
+          - { os: macos-15, target: macos-arm64, platform: "macosx_*_arm64.whl" }
           # the Intel Mac app is staged on Apple silicon, its dependencies fetched for an Intel Mac
-          - { os: macos-14, target: macos-x86_64, platform: "macosx_*_x86_64.whl" }
+          - { os: macos-15, target: macos-x86_64, platform: "macosx_*_x86_64.whl" }
     steps:
       - uses: actions/checkout@v4
         with:

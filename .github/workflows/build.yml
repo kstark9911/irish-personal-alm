@@ -42,8 +42,8 @@ jobs:
       matrix:
         # the Intel Mac wheel is cross-compiled on Apple silicon and tested under Rosetta
         include: ${{ inputs.systems == 'windows' && fromJSON('[{"os":"windows-2022","arch":"AMD64"}]')
-                     || inputs.systems == 'mac' && fromJSON('[{"os":"macos-14","arch":"arm64"},{"os":"macos-14","arch":"x86_64"}]')
-                     || fromJSON('[{"os":"windows-2022","arch":"AMD64"},{"os":"macos-14","arch":"arm64"},{"os":"macos-14","arch":"x86_64"}]') }}
+                     || inputs.systems == 'mac' && fromJSON('[{"os":"macos-15","arch":"arm64"},{"os":"macos-15","arch":"x86_64"}]')
+                     || fromJSON('[{"os":"windows-2022","arch":"AMD64"},{"os":"macos-15","arch":"arm64"},{"os":"macos-15","arch":"x86_64"}]') }}
     steps:
       - name: The keys are set
         shell: bash
